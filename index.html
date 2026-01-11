@@ -13,7 +13,7 @@
         :root {
             --bg: #ffffff;
             --fg: #000000;
-            --accent: #00FF00; /* Кислотно-зеленый для акцентов */
+            --accent: #00FF00;
         }
         body { 
             font-family: 'JetBrains Mono', monospace;
@@ -21,14 +21,14 @@
             color: var(--fg);
             margin: 0;
             padding: 0;
+            -webkit-font-smoothing: antialiased;
         }
         
-        /* Читабельный текст */
         .readable-text {
             font-family: 'Playfair Display', serif;
+            letter-spacing: -0.01em;
         }
 
-        /* Брутализм элементы */
         .b-border { border: 2px solid #000; }
         .b-border-b { border-bottom: 2px solid #000; }
         .b-border-r { border-right: 2px solid #000; }
@@ -42,14 +42,21 @@
             font-weight: 800;
             text-transform: uppercase;
             cursor: pointer;
-            transition: all 0.05s;
+            transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1);
             position: relative;
         }
-        .b-btn:hover {
+        .b-btn:hover:not(:disabled) {
             background: var(--accent);
+            transform: translate(-2px, -2px);
+            box-shadow: 2px 2px 0px 0px #000;
         }
-        .b-btn:active {
-            transform: translate(2px, 2px);
+        .b-btn:active:not(:disabled) {
+            transform: translate(0px, 0px);
+            box-shadow: 0px 0px 0px 0px #000;
+        }
+        .b-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
         }
 
         .b-input {
@@ -57,27 +64,21 @@
             padding: 10px;
             font-family: 'JetBrains Mono', monospace;
             outline: none;
+            transition: background 0.2s;
         }
         .b-input:focus {
-            background: #fafafa;
+            background: #fff;
             border-color: var(--accent);
         }
 
         .custom-scrollbar::-webkit-scrollbar {
-            width: 10px;
+            width: 8px;
         }
         .custom-scrollbar::-webkit-scrollbar-track {
-            background: #fff;
-            border-left: 2px solid #000;
+            background: transparent;
         }
         .custom-scrollbar::-webkit-scrollbar-thumb {
             background: #000;
-            border: 2px solid #fff;
-        }
-
-        ::selection {
-            background: #000;
-            color: var(--accent);
         }
 
         .line-clamp-5 {
@@ -85,6 +86,14 @@
             -webkit-line-clamp: 5;
             -webkit-box-orient: vertical;  
             overflow: hidden;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        article {
+            animation: fadeIn 0.4s ease-out forwards;
         }
     </style>
 <script type="importmap">
