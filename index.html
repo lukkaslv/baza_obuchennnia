@@ -1,0 +1,106 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EDU_VAULT | RAW_BRUTALISM</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700;800&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #ffffff;
+            --fg: #000000;
+            --accent: #00FF00; /* Кислотно-зеленый для акцентов */
+        }
+        body { 
+            font-family: 'JetBrains Mono', monospace;
+            background-color: var(--bg);
+            color: var(--fg);
+            margin: 0;
+            padding: 0;
+        }
+        
+        /* Читабельный текст */
+        .readable-text {
+            font-family: 'Playfair Display', serif;
+        }
+
+        /* Брутализм элементы */
+        .b-border { border: 2px solid #000; }
+        .b-border-b { border-bottom: 2px solid #000; }
+        .b-border-r { border-right: 2px solid #000; }
+        .b-border-l { border-left: 2px solid #000; }
+        .b-border-t { border-top: 2px solid #000; }
+        
+        .b-btn {
+            background: #fff;
+            border: 2px solid #000;
+            padding: 8px 16px;
+            font-weight: 800;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.05s;
+            position: relative;
+        }
+        .b-btn:hover {
+            background: var(--accent);
+        }
+        .b-btn:active {
+            transform: translate(2px, 2px);
+        }
+
+        .b-input {
+            border: 2px solid #000;
+            padding: 10px;
+            font-family: 'JetBrains Mono', monospace;
+            outline: none;
+        }
+        .b-input:focus {
+            background: #fafafa;
+            border-color: var(--accent);
+        }
+
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #fff;
+            border-left: 2px solid #000;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #000;
+            border: 2px solid #fff;
+        }
+
+        ::selection {
+            background: #000;
+            color: var(--accent);
+        }
+
+        .line-clamp-5 {
+            display: -webkit-box;
+            -webkit-line-clamp: 5;
+            -webkit-box-orient: vertical;  
+            overflow: hidden;
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.35.0",
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "react": "https://esm.sh/react@^19.2.3",
+    "@heroicons/react/": "https://esm.sh/@heroicons/react@^2.2.0/"
+  }
+}
+</script>
+</head>
+<body class="overflow-hidden">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+</body>
+</html>
