@@ -1,35 +1,30 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
 import { Module, ContentItem } from './types';
-// Fixed Firebase imports for version 9+
-import { initializeApp, getApps, getApp } from "firebase/app";
+// Fixed: Using correct firebase import path for this environment
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
 import { 
   getFirestore, 
   collection, 
   doc, 
   setDoc, 
-  updateDoc, 
+  getDocs, 
   deleteDoc, 
-  onSnapshot, 
   query, 
-  orderBy,
+  where,
+  onSnapshot,
   writeBatch
-} from "firebase/firestore";
+} from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 import { 
   PlusIcon, 
   TrashIcon, 
-  XMarkIcon, 
-  ArchiveBoxIcon, 
-  LockClosedIcon, 
-  CloudIcon, 
   MagnifyingGlassIcon, 
-  PencilSquareIcon, 
-  CheckIcon, 
-  Bars3Icon,
-  ExclamationCircleIcon,
-  SparklesIcon
+  XMarkIcon,
+  ArchiveBoxIcon,
+  CloudArrowUpIcon,
+  LockClosedIcon,
+  ArrowUpCircleIcon
 } from '@heroicons/react/24/outline';
-import { GoogleGenAI } from "@google/genai";
 
 const firebaseConfig = {
   apiKey: "AIzaSyBQ7ezdVLef5esjediEQA7_Wd_0YigejP0",
@@ -40,8 +35,7 @@ const firebaseConfig = {
   appId: "1:1058518823725:web:042a70100bc58ab8aed9a4"
 };
 
-const ACCESS_PASSWORD = '1337';
-const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
+const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 
 const App: React.FC = () => {
@@ -51,138 +45,148 @@ const App: React.FC = () => {
   const [items, setItems] = useState<ContentItem[]>([]);
   const [activeModuleId, setActiveModuleId] = useState<string | null>(null);
   const [isAddingModule, setIsAddingModule] = useState(false);
-  const [editingModuleId, setEditingModuleId] = useState<string | null>(null);
-  const [tempModuleTitle, setTempModuleTitle] = useState('');
   const [newModuleTitle, setNewModuleTitle] = useState('');
   const [newContent, setNewContent] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedItem, setSelectedItem] = useState<ContentItem | null>(null);
-  const [isEditingContent, setIsEditingContent] = useState(false);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [cloudStatus, setCloudStatus] = useState<'подключено' | 'ошибка' | 'синхронизация'>('синхронизация');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error' | 'local'>('idle');
   const [hasLocalData, setHasLocalData] = useState(false);
-  const [isAnalysing, setIsAnalysing] = useState(false);
 
   useEffect(() => {
     const auth = localStorage.getItem('vault_auth');
     if (auth === 'true') setIsAuthenticated(true);
 
-    const localModules = localStorage.getItem('vault_modules');
-    const localItems = localStorage.getItem('vault_items');
-    try {
-      if ((localModules && JSON.parse(localModules).length > 0) || 
-          (localItems && JSON.parse(localItems).length > 0)) {
-        setHasLocalData(true);
-      }
-    } catch (e) { console.warn("Local storage check skipped"); }
+    const savedModules = localStorage.getItem('eduvault_modules');
+    const savedItems = localStorage.getItem('eduvault_items');
+    
+    if (savedModules || savedItems) {
+      setHasLocalData(true);
+      if (savedModules && modules.length === 0) setModules(JSON.parse(savedModules));
+      if (savedItems && items.length === 0) setItems(JSON.parse(savedItems));
+      setSyncStatus('local');
+    }
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
-    const q = query(collection(db, "modules"), orderBy("createdAt", "asc"));
-    const unsub = onSnapshot(q, (snapshot) => {
-      setModules(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as Module)));
-      setCloudStatus('подключено');
-    }, () => setCloudStatus('ошибка'));
-    return () => unsub();
-  }, [isAuthenticated]);
+    if (isAuthenticated) {
+      const unsubModules = onSnapshot(collection(db, "modules"), (snapshot) => {
+        const cloudModules = snapshot.docs.map(doc => doc.data() as Module);
+        if (cloudModules.length > 0) {
+          setModules(cloudModules);
+          setSyncStatus('idle');
+          setHasLocalData(false);
+        }
+      });
 
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    const q = query(collection(db, "items"), orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(q, (snapshot) => {
-      setItems(snapshot.docs.map(d => ({ ...d.data(), id: d.id } as ContentItem)));
-    }, () => setCloudStatus('ошибка'));
-    return () => unsub();
+      const unsubItems = onSnapshot(collection(db, "items"), (snapshot) => {
+        const cloudItems = snapshot.docs.map(doc => doc.data() as ContentItem);
+        if (cloudItems.length > 0) {
+          setItems(cloudItems);
+        }
+      });
+
+      return () => {
+        unsubModules();
+        unsubItems();
+      };
+    }
   }, [isAuthenticated]);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (password === ACCESS_PASSWORD) {
+    if (password === '1337') {
       setIsAuthenticated(true);
       localStorage.setItem('vault_auth', 'true');
     } else {
-      alert('ОШИБКА ДОСТУПА: НЕВЕРНЫЙ КОД');
+      alert('ОШИБКА ДОСТУПА');
     }
   };
 
-  const handleManualMigration = async () => {
-    if (!window.confirm('ПЕРЕНЕСТИ ВСЕ ЛОКАЛЬНЫЕ ДАННЫЕ В ОБЛАКО?')) return;
-    setCloudStatus('синхронизация');
+  const migrateToCloud = async () => {
+    setSyncStatus('syncing');
     try {
       const batch = writeBatch(db);
-      const localModules = JSON.parse(localStorage.getItem('vault_modules') || '[]');
-      const localItems = JSON.parse(localStorage.getItem('vault_items') || '[]');
-      localModules.forEach((m: Module) => batch.set(doc(db, "modules", m.id), m));
-      localItems.forEach((i: ContentItem) => batch.set(doc(db, "items", i.id), i));
+      
+      modules.forEach((m) => {
+        const ref = doc(db, "modules", m.id);
+        batch.set(ref, m);
+      });
+
+      items.forEach((item) => {
+        const ref = doc(db, "items", item.id);
+        batch.set(ref, item);
+      });
+
       await batch.commit();
+      
+      localStorage.removeItem('eduvault_modules');
+      localStorage.removeItem('eduvault_items');
       setHasLocalData(false);
-      setCloudStatus('подключено');
-      alert('ДАННЫЕ УСПЕШНО СИНХРОНИЗИРОВАНЫ С ОБЛАКОМ');
+      setSyncStatus('idle');
+      alert("МИГРАЦИЯ ИЗ LOCALSTORAGE УСПЕШНА.");
     } catch (e) {
-      setCloudStatus('ошибка');
-      alert('ОШИБКА СИНХРОНИЗАЦИИ');
+      console.error(e);
+      setSyncStatus('error');
+      alert("ОШИБКА МИГРАЦИИ");
     }
-  };
-
-  const analyzeContent = async () => {
-    if (!newContent.trim()) return;
-    setIsAnalysing(true);
-    try {
-      // Gemini initialization using the specified model for coding/reasoning tasks
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: `Проведи синтез следующего текста через призму науки, глубинной психологии и алхимии. Оформи как структурированный отчет: ${newContent}`,
-      });
-      if (response.text) {
-        setNewContent(prev => `${prev}\n\n--- СИНТЕЗ (ALCHYMIA/PSYCHE/RATIO) ---\n${response.text}`);
-      }
-    } catch (e) {
-      console.error("Gemini Error:", e);
-      alert("ОШИБКА АНАЛИЗА ГЕНЕЗИСА");
-    } finally {
-      setIsAnalysing(false);
-    }
-  };
-
-  const addItem = async () => {
-    if (!newContent.trim() || !activeModuleId) return;
-    const title = newContent.trim().split('\n')[0].substring(0, 40).toUpperCase();
-    const id = Date.now().toString();
-    try {
-      setCloudStatus('синхронизация');
-      await setDoc(doc(db, "items", id), {
-        id, moduleId: activeModuleId, title, content: newContent, tags: [], type: 'text', createdAt: Date.now()
-      });
-      setNewContent('');
-      setCloudStatus('подключено');
-    } catch (e) { setCloudStatus('ошибка'); }
   };
 
   const addModule = async () => {
     if (!newModuleTitle.trim()) return;
-    const id = Date.now().toString();
-    try {
-      await setDoc(doc(db, "modules", id), { id, title: newModuleTitle.toUpperCase(), description: '', createdAt: Date.now() });
-      setNewModuleTitle('');
-      setIsAddingModule(false);
-    } catch (e) { setCloudStatus('ошибка'); }
+    const newModule: Module = {
+      id: Date.now().toString(),
+      title: newModuleTitle.toUpperCase(),
+      description: '',
+      createdAt: Date.now()
+    };
+    setSyncStatus('syncing');
+    await setDoc(doc(db, "modules", newModule.id), newModule);
+    setNewModuleTitle('');
+    setIsAddingModule(false);
+    setSyncStatus('idle');
   };
 
-  const saveModuleTitle = async (id: string) => {
-    try {
-      await updateDoc(doc(db, "modules", id), { title: tempModuleTitle.toUpperCase() });
-      setEditingModuleId(null);
-    } catch (e) { setCloudStatus('ошибка'); }
+  const handleQuickAdd = async () => {
+    if (!newContent.trim() || !activeModuleId) return;
+    const firstLine = newContent.trim().split('\n')[0].substring(0, 40);
+    const newItem: ContentItem = {
+      id: Date.now().toString(),
+      moduleId: activeModuleId,
+      title: (firstLine || 'БЕЗ НАЗВАНИЯ').toUpperCase(),
+      content: newContent,
+      tags: [],
+      type: 'text',
+      createdAt: Date.now()
+    };
+    setSyncStatus('syncing');
+    await setDoc(doc(db, "items", newItem.id), newItem);
+    setNewContent('');
+    setSyncStatus('idle');
   };
 
-  const updateItemContent = async () => {
-    if (!selectedItem) return;
-    try {
-      await updateDoc(doc(db, "items", selectedItem.id), { content: selectedItem.content });
-      setIsEditingContent(false);
-    } catch (e) { setCloudStatus('ошибка'); }
+  const deleteItem = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    if (window.confirm('УДАЛИТЬ ЗАПИСЬ?')) {
+      setSyncStatus('syncing');
+      await deleteDoc(doc(db, "items", id));
+      if (selectedItem?.id === id) setSelectedItem(null);
+      setSyncStatus('idle');
+    }
+  };
+
+  const deleteModule = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    if (window.confirm('УДАЛИТЬ МОДУЛЬ И ВСЁ СОДЕРЖИМОЕ?')) {
+      setSyncStatus('syncing');
+      await deleteDoc(doc(db, "modules", id));
+      const q = query(collection(db, "items"), where("moduleId", "==", id));
+      const snap = await getDocs(q);
+      const batch = writeBatch(db);
+      snap.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      if (activeModuleId === id) setActiveModuleId(null);
+      setSyncStatus('idle');
+    }
   };
 
   const filteredItems = useMemo(() => {
@@ -191,91 +195,200 @@ const App: React.FC = () => {
       const matchesSearch = item.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
                            item.content.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesModule && matchesSearch;
-    });
+    }).sort((a, b) => b.createdAt - a.createdAt);
   }, [items, activeModuleId, searchQuery]);
+
+  const activeModule = modules.find(m => m.id === activeModuleId);
 
   if (!isAuthenticated) {
     return (
-      <div className="h-screen w-screen bg-black flex items-center justify-center p-6 animate-fade">
-        <form onSubmit={handleLogin} className="w-full max-w-md b-border bg-white p-8 md:p-12 shadow-[15px_15px_0px_0px_#00FF00]">
-          <div className="flex justify-center mb-8"><LockClosedIcon className="w-16 h-16 text-black" /></div>
-          <h1 className="text-3xl font-black text-center mb-10 uppercase italic tracking-tighter">PRIVATE_STORAGE</h1>
-          <input type="password" autoFocus className="w-full b-input text-center text-2xl mb-6" placeholder="****" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <button type="submit" className="w-full b-btn bg-black text-white py-4 hover:bg-[#00FF00] hover:text-black uppercase text-sm tracking-widest">ВОЙТИ</button>
+      <div className="h-screen w-screen bg-black flex items-center justify-center p-6 font-bold">
+        <form onSubmit={handleLogin} className="w-full max-w-md border-4 border-white bg-white p-12 shadow-[20px_20px_0px_0px_#00FF00]">
+          <div className="flex justify-center mb-8">
+            <LockClosedIcon className="w-12 h-12 text-black" />
+          </div>
+          <h1 className="text-4xl font-black text-center mb-8 uppercase italic">Vault_Locked</h1>
+          <input 
+            type="password"
+            autoFocus
+            className="w-full border-4 border-black p-4 text-center text-2xl mb-6 focus:bg-[#00FF00]/10 outline-none"
+            placeholder="****"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+          <button type="submit" className="w-full border-4 border-black bg-black text-white py-4 text-sm font-black tracking-widest hover:bg-[#00FF00] hover:text-black transition-colors">
+            ACCESS_DATABASE
+          </button>
         </form>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-white text-black font-bold">
-      {isSidebarOpen && <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setIsSidebarOpen(false)} />}
-      <aside className={`fixed md:relative w-80 h-full b-border-r flex flex-col bg-white z-50 transition-transform ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-        <div className="p-8 b-border-b bg-black text-white flex items-center justify-between">
-          <div className="flex items-center gap-3"><ArchiveBoxIcon className="w-8 h-8 text-[#00FF00]" /><h1 className="text-3xl font-black italic tracking-tighter uppercase">БАЗА.</h1></div>
-          <button className="md:hidden" onClick={() => setIsSidebarOpen(false)}><XMarkIcon className="w-8 h-8 text-white" /></button>
+    <div className="flex h-screen overflow-hidden bg-white text-black font-bold">
+      <aside className="w-80 border-r-4 border-black flex flex-col z-30 shrink-0 bg-white">
+        <div className="p-8 border-b-4 border-black bg-black text-white relative">
+          <div className="flex items-center gap-3">
+            <ArchiveBoxIcon className="w-8 h-8 text-[#00FF00]" />
+            <h1 className="text-2xl font-black italic">VAULT_BASE</h1>
+          </div>
+          <div className="mt-4 flex items-center gap-2">
+            <div className={`w-2 h-2 rounded-full ${syncStatus === 'syncing' ? 'bg-yellow-400 animate-pulse' : 'bg-[#00FF00]'}`} />
+            <span className="text-[10px] uppercase opacity-50">
+              {syncStatus === 'local' ? 'LOCAL_DATA_DETECTED' : 'FIREBASE_ONLINE'}
+            </span>
+          </div>
         </div>
-        <nav className="flex-1 overflow-y-auto custom-scrollbar">
-          <button onClick={() => { setActiveModuleId(null); setIsSidebarOpen(false); }} className={`w-full text-left px-8 py-6 text-xs b-border-b uppercase tracking-widest ${!activeModuleId ? 'bg-[#00FF00]' : 'hover:bg-gray-100'}`}>[ ВЕСЬ_АРХИВ: {items.length} ]</button>
-          <div className="px-8 py-4 bg-gray-50 b-border-b flex justify-between items-center"><span className="text-[10px] uppercase opacity-40 italic">КАТЕГОРИИ</span><button onClick={() => setIsAddingModule(true)}><PlusIcon className="w-6 h-6 stroke-[3px]" /></button></div>
-          {modules.map(module => (
-            <div key={module.id} className="group relative b-border-b flex items-center">
-              {editingModuleId === module.id ? (
-                <div className="flex-1 p-2 flex gap-1 bg-[#00FF00]/10"><input autoFocus className="flex-1 b-input text-xs py-2 uppercase" value={tempModuleTitle} onChange={(e) => setTempModuleTitle(e.target.value)} /><button onClick={() => saveModuleTitle(module.id)} className="p-2 bg-black text-white"><CheckIcon className="w-5 h-5" /></button></div>
-              ) : (
-                <><button onClick={() => { setActiveModuleId(module.id); setIsSidebarOpen(false); }} className={`flex-1 text-left px-8 py-5 text-sm uppercase transition-all ${activeModuleId === module.id ? 'bg-black text-white' : 'hover:bg-gray-50'}`}>{module.title}</button>
-                <div className="absolute right-2 opacity-0 group-hover:opacity-100 flex gap-1"><button onClick={() => { setEditingModuleId(module.id); setTempModuleTitle(module.title); }} className="p-2 hover:text-[#00FF00]"><PencilSquareIcon className="w-5 h-5" /></button></div></>
-              )}
+
+        <nav className="flex-1 overflow-y-auto">
+          {hasLocalData && (
+             <div className="p-6 bg-[#00FF00]/10 border-b-4 border-black">
+                <p className="text-[10px] uppercase mb-4 text-black font-black">Обнаружены данные в LocalStorage!</p>
+                <button 
+                  onClick={migrateToCloud}
+                  className="w-full border-2 border-black bg-black text-white text-[10px] py-3 flex items-center justify-center gap-2 hover:bg-[#00FF00] hover:text-black transition-colors"
+                >
+                  <ArrowUpCircleIcon className="w-4 h-4" />
+                  MIGRATE TO FIREBASE
+                </button>
+             </div>
+          )}
+
+          <button
+            onClick={() => setActiveModuleId(null)}
+            className={`w-full text-left px-8 py-5 text-xs border-b-2 border-black uppercase font-black ${!activeModuleId ? 'bg-[#00FF00]' : 'hover:bg-gray-100'}`}
+          >
+            [ Весь архив ]
+          </button>
+
+          <div className="px-8 py-4 bg-gray-50 border-b-2 border-black flex items-center justify-between">
+            <span className="text-[10px] uppercase opacity-40">Категории</span>
+            <button onClick={() => setIsAddingModule(true)} className="p-1 border-2 border-black bg-white hover:bg-black hover:text-white transition-colors">
+              <PlusIcon className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex flex-col">
+            {modules.map(module => (
+              <div key={module.id} className="group relative border-b-2 border-black">
+                <button
+                  onClick={() => setActiveModuleId(module.id)}
+                  className={`w-full text-left px-8 py-4 text-sm transition-all pr-16 uppercase font-black ${activeModuleId === module.id ? 'bg-black text-white' : 'hover:bg-gray-50'}`}
+                >
+                  {module.title}
+                </button>
+                <button 
+                  onClick={(e) => deleteModule(module.id, e)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all z-40 border-2 border-black bg-white"
+                >
+                  <TrashIcon className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {isAddingModule && (
+            <div className="p-8 border-b-2 border-black bg-white">
+              <input 
+                autoFocus
+                placeholder="ИМЯ МОДУЛЯ..."
+                className="w-full border-2 border-black p-3 text-xs mb-4 uppercase outline-none focus:bg-[#00FF00]/10"
+                value={newModuleTitle}
+                onChange={(e) => setNewModuleTitle(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addModule()}
+              />
+              <div className="flex gap-2">
+                <button onClick={addModule} className="border-2 border-black flex-1 bg-black text-white text-[10px] py-2 hover:bg-[#00FF00] hover:text-black font-black">SAVE</button>
+                <button onClick={() => setIsAddingModule(false)} className="border-2 border-black flex-1 text-[10px] py-2 hover:bg-gray-100 font-black">CANCEL</button>
+              </div>
             </div>
-          ))}
-          {isAddingModule && <div className="p-6 b-border-b"><input autoFocus placeholder="ИМЯ..." className="w-full b-input text-sm mb-3 uppercase" value={newModuleTitle} onChange={(e) => setNewModuleTitle(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addModule()} /><div className="flex gap-2"><button onClick={addModule} className="b-btn flex-1 text-[10px] bg-black text-white">ОК</button><button onClick={() => setIsAddingModule(false)} className="b-btn flex-1 text-[10px]">ОТМЕНА</button></div></div>}
+          )}
         </nav>
-        <div className="p-4 b-border-t bg-black text-[#00FF00] text-[9px] uppercase flex flex-col gap-2">
-          {hasLocalData && <button onClick={handleManualMigration} className="w-full py-2 border-2 border-[#00FF00] text-[#00FF00] hover:bg-[#00FF00] hover:text-black flex items-center justify-center gap-2 animate-pulse font-bold tracking-tighter"><ExclamationCircleIcon className="w-4 h-4" />[! ПЕРЕНЕСТИ ЛОКАЛЬНЫЕ ДАННЫЕ !]</button>}
-          <div className="flex justify-between items-center"><div className="flex items-center gap-2"><CloudIcon className={`w-4 h-4 ${cloudStatus === 'ошибка' ? 'text-red-500' : ''}`} />{cloudStatus}</div><button onClick={() => { localStorage.removeItem('vault_auth'); window.location.reload(); }} className="hover:underline opacity-50">ВЫЙТИ</button></div>
-        </div>
       </aside>
-      <main className="flex-1 flex flex-col relative bg-[#f3f3f3] overflow-hidden">
-        <header className="h-20 b-border-b flex items-center justify-between px-6 md:px-12 bg-white shrink-0 z-20">
-          <div className="flex items-center gap-4"><button className="md:hidden p-2" onClick={() => setIsSidebarOpen(true)}><Bars3Icon className="w-8 h-8" /></button><h2 className="text-xl md:text-3xl font-black italic uppercase truncate">{activeModuleId ? `/${modules.find(m => m.id === activeModuleId)?.title}` : '/ОБЩИЙ_ДОСТУП'}</h2></div>
-          <div className="relative group hidden sm:block"><MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 opacity-30" /><input placeholder="ПОИСК..." className="b-input py-2 pl-10 text-xs w-64" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} /></div>
+
+      <main className="flex-1 flex flex-col h-full bg-[#fafafa]">
+        <header className="h-20 border-b-4 border-black flex items-center justify-between px-10 bg-white">
+          <h2 className="text-2xl font-black uppercase italic">
+            {activeModule ? `/${activeModule.title}` : '/ALL_DATA'}
+          </h2>
+          <div className="relative w-64">
+            <input 
+              placeholder="ПОИСК..."
+              className="w-full border-2 border-black px-4 py-2 text-xs uppercase outline-none focus:bg-[#00FF00]/10"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            <MagnifyingGlassIcon className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 opacity-30" />
+          </div>
         </header>
-        <div className="flex-1 overflow-y-auto p-4 md:p-12 custom-scrollbar">
-          <div className="max-w-4xl mx-auto space-y-8 pb-32">
+
+        <div className="flex-1 overflow-y-auto p-10">
+          <div className="max-w-4xl mx-auto space-y-10">
             {activeModuleId && (
-              <div className="b-border bg-white p-6 shadow-[8px_8px_0px_0px_#000] animate-fade">
-                <textarea className="w-full min-h-[120px] border-none text-xl resize-none font-bold outline-none italic placeholder:opacity-20" placeholder="НАЧНИТЕ ПИСАТЬ..." value={newContent} onChange={(e) => setNewContent(e.target.value)} />
-                <div className="mt-4 pt-4 b-border-t border-dashed flex justify-between items-center">
-                  <button onClick={analyzeContent} disabled={isAnalysing || !newContent.trim()} className="flex items-center gap-2 text-xs uppercase hover:text-[#00FF00] transition-colors disabled:opacity-30">
-                    <SparklesIcon className={`w-5 h-5 ${isAnalysing ? 'animate-spin' : ''}`} /> {isAnalysing ? 'СИНТЕЗ...' : 'ЗАПУСТИТЬ СИНТЕЗ'}
+              <div className="border-4 border-black bg-white p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+                <textarea 
+                  className="w-full min-h-[120px] border-none focus:ring-0 text-lg leading-relaxed resize-none placeholder:text-gray-200 bg-transparent outline-none font-black italic"
+                  placeholder="Введите текст для сохранения в базу..."
+                  value={newContent}
+                  onChange={(e) => setNewContent(e.target.value)}
+                />
+                <div className="mt-6 pt-6 border-t-2 border-black border-dashed flex justify-end">
+                  <button 
+                    onClick={handleQuickAdd}
+                    disabled={!newContent.trim()}
+                    className="border-2 border-black bg-black text-white px-10 py-3 text-[10px] font-black hover:bg-[#00FF00] hover:text-black transition-colors disabled:opacity-30 disabled:hover:bg-black disabled:hover:text-white"
+                  >
+                    SAVE_TO_FIREBASE
                   </button>
-                  <button onClick={addItem} disabled={!newContent.trim()} className="b-btn bg-black text-white px-10 py-3 text-xs uppercase tracking-widest">СОХРАНИТЬ В ОБЛАКО</button>
                 </div>
               </div>
             )}
-            <div className="grid gap-6">
+
+            <div className="grid grid-cols-1 gap-8 pb-20">
               {filteredItems.map(item => (
-                <article key={item.id} className="b-border bg-white cursor-pointer hover:shadow-[10px_10px_0px_0px_#00FF00] transition-all group overflow-hidden" onClick={() => setSelectedItem(item)}>
-                  <div className="p-4 b-border-b flex justify-between items-center bg-white group-hover:bg-gray-50"><h3 className="text-sm md:text-lg font-black uppercase italic tracking-tight truncate mr-4">{item.title}</h3><button onClick={(e) => { e.stopPropagation(); if(confirm('УДАЛИТЬ ЗАПИСЬ НАВСЕГДА?')) deleteDoc(doc(db, "items", item.id)); }} className="p-2 hover:text-red-600 transition-all"><TrashIcon className="w-5 h-5" /></button></div>
-                  <div className="p-6"><p className="line-clamp-3 text-lg readable-text italic opacity-60">{item.content}</p></div>
+                <article 
+                  key={item.id} 
+                  className="border-4 border-black bg-white cursor-pointer hover:shadow-[8px_8px_0px_0px_#00FF00] transition-all"
+                  onClick={() => setSelectedItem(item)}
+                >
+                  <div className="p-4 border-b-2 border-black flex justify-between items-center">
+                     <h3 className="text-md font-black uppercase underline decoration-[#00FF00] decoration-4">
+                       {item.title}
+                     </h3>
+                     <div className="flex items-center gap-4">
+                       <span className="text-[9px] opacity-30 font-black">{new Date(item.createdAt).toLocaleDateString()}</span>
+                       <button 
+                          onClick={(e) => deleteItem(item.id, e)}
+                          className="p-1 hover:text-red-600 transition-colors"
+                       >
+                         <TrashIcon className="w-4 h-4" />
+                       </button>
+                     </div>
+                  </div>
+                  <div className="p-6 bg-white line-clamp-3 text-sm opacity-70 font-black italic">
+                    {item.content}
+                  </div>
                 </article>
               ))}
-              {filteredItems.length === 0 && <div className="text-center py-20 opacity-20 uppercase tracking-widest">[ ПУСТО ]</div>}
             </div>
           </div>
         </div>
+
         {selectedItem && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center animate-fade">
-            <div className="absolute inset-0 bg-black/95" onClick={() => setSelectedItem(null)} />
-            <div className="relative w-full max-w-5xl h-[90vh] bg-white b-border flex flex-col overflow-hidden m-4 shadow-[20px_20px_0px_0px_#00FF00]">
-              <header className="p-6 b-border-b flex justify-between items-center bg-white">
-                <h2 className="text-xl md:text-3xl font-black italic uppercase truncate">{selectedItem.title}</h2>
-                <div className="flex gap-2">
-                  <button onClick={() => setIsEditingContent(!isEditingContent)} className={`b-btn p-3 ${isEditingContent ? 'bg-[#00FF00]' : 'bg-white'}`}>{isEditingContent ? <CheckIcon className="w-6 h-6" onClick={updateItemContent} /> : <PencilSquareIcon className="w-6 h-6" />}</button>
-                  <button onClick={() => setSelectedItem(null)} className="b-btn bg-black text-white p-3"><XMarkIcon className="w-6 h-6 stroke-[3px]" /></button>
-                </div>
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/90 animate-in fade-in">
+            <div className="absolute inset-0" onClick={() => setSelectedItem(null)} />
+            <div className="relative w-full max-w-5xl h-[80vh] bg-white border-4 border-black shadow-[20px_20px_0px_0px_#00FF00] flex flex-col">
+              <header className="p-6 border-b-4 border-black flex justify-between items-center bg-white sticky top-0">
+                <h2 className="text-2xl font-black uppercase underline decoration-[#00FF00] decoration-4">{selectedItem.title}</h2>
+                <button onClick={() => setSelectedItem(null)} className="border-4 border-black bg-black text-white p-2 hover:bg-[#00FF00] hover:text-black transition-colors">
+                  <XMarkIcon className="w-6 h-6" />
+                </button>
               </header>
-              <div className="flex-1 overflow-y-auto p-6 md:p-12 bg-white custom-scrollbar"><div className="max-w-3xl mx-auto">{isEditingContent ? <textarea className="w-full h-full min-h-[60vh] b-input text-lg readable-text italic leading-relaxed" value={selectedItem.content} onChange={(e) => setSelectedItem({...selectedItem, content: e.target.value})} /> : <p className="readable-text text-2xl md:text-4xl leading-relaxed whitespace-pre-wrap italic text-[#1a1a1a]">{selectedItem.content}</p>}</div></div>
+              <div className="flex-1 overflow-y-auto p-12 bg-white">
+                <div className="text-xl leading-relaxed whitespace-pre-wrap italic font-black">
+                  {selectedItem.content}
+                </div>
+              </div>
             </div>
           </div>
         )}
