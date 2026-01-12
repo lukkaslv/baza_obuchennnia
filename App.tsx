@@ -39,8 +39,11 @@ const db = getFirestore(app);
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState('');
+  
+  // Состояния для данных
   const [modules, setModules] = useState<Module[]>([]);
   const [items, setItems] = useState<ContentItem[]>([]);
+  
   const [activeModuleId, setActiveModuleId] = useState<string | null>(null);
   const [isAddingModule, setIsAddingModule] = useState(false);
   const [newModuleTitle, setNewModuleTitle] = useState('');
@@ -50,40 +53,68 @@ const App: React.FC = () => {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'error' | 'local'>('idle');
   const [hasLocalData, setHasLocalData] = useState(false);
 
-  // ПРОВЕРКА LOCALSTORAGE СРАЗУ
+  // 1. ИНИЦИАЛИЗАЦИЯ ИЗ LOCALSTORAGE (БЕЗ УДАЛЕНИЯ ПРИ СТАРТЕ)
   useEffect(() => {
     const auth = localStorage.getItem('vault_auth');
     if (auth === 'true') setIsAuthenticated(true);
 
-    const savedModules = localStorage.getItem('eduvault_modules');
-    const savedItems = localStorage.getItem('eduvault_items');
+    const savedModulesRaw = localStorage.getItem('eduvault_modules');
+    const savedItemsRaw = localStorage.getItem('eduvault_items');
     
-    if (savedModules || savedItems) {
-      setHasLocalData(true);
-      // Загружаем локальные данные в стейт, чтобы они были видны ДО миграции
-      if (savedModules) setModules(JSON.parse(savedModules));
-      if (savedItems) setItems(JSON.parse(savedItems));
-      setSyncStatus('local');
+    if (savedModulesRaw || savedItemsRaw) {
+      const localMods = savedModulesRaw ? JSON.parse(savedModulesRaw) : [];
+      const localItems = savedItemsRaw ? JSON.parse(savedItemsRaw) : [];
+      
+      if (localMods.length > 0 || localItems.length > 0) {
+        setHasLocalData(true);
+        setModules(localMods);
+        setItems(localItems);
+        setSyncStatus('local');
+      }
     }
   }, []);
 
-  // СИНХРОНИЗАЦИЯ С ОБЛАКОМ
+  // 2. СИНХРОНИЗАЦИЯ С FIREBASE (СЛИЯНИЕ, А НЕ ЗАМЕНА)
   useEffect(() => {
     if (isAuthenticated) {
+      // Подписка на модули с логикой слияния
       const unsubModules = onSnapshot(collection(db, "modules"), (snapshot) => {
         const cloudModules = snapshot.docs.map(doc => doc.data() as Module);
+        
+        setModules(prev => {
+          // Если облако пустое, а у нас есть локальные данные — не затираем!
+          if (cloudModules.length === 0) return prev;
+          
+          // Если в облаке что-то есть, мерджим (облако приоритетнее по ID)
+          const merged = [...cloudModules];
+          prev.forEach(localMod => {
+            if (!merged.find(m => m.id === localMod.id)) {
+              merged.push(localMod);
+            }
+          });
+          return merged;
+        });
+        
         if (cloudModules.length > 0) {
-          setModules(cloudModules);
           setSyncStatus('idle');
-          setHasLocalData(false); // Данные в облаке есть, локальный режим отключаем
         }
       });
 
+      // Подписка на записи с логикой слияния
       const unsubItems = onSnapshot(collection(db, "items"), (snapshot) => {
         const cloudItems = snapshot.docs.map(doc => doc.data() as ContentItem);
-        if (cloudItems.length > 0) {
-          setItems(cloudItems);
-        }
+        
+        setItems(prev => {
+          if (cloudItems.length === 0) return prev;
+          
+          const merged = [...cloudItems];
+          prev.forEach(localItem => {
+            if (!merged.find(i => i.id === localItem.id)) {
+              merged.push(localItem);
+            }
+          });
+          return merged;
+        });
       });
 
       return () => {
@@ -103,14 +134,15 @@ const App: React.FC = () => {
     }
   };
 
+  // МИГРАЦИЯ: ПУШИМ ВСЁ ТЕКУЩЕЕ В ОБЛАКО
   const migrateToCloud = async () => {
-    if (!window.confirm("ПЕРЕНЕСТИ ВСЕ ДАННЫЕ В FIREBASE?")) return;
+    if (!window.confirm("ЭТО ДЕЙСТВИЕ ПЕРЕНЕСЕТ ВСЕ ЛОКАЛЬНЫЕ ФАЙЛЫ В FIREBASE. ПРОДОЛЖИТЬ?")) return;
     
     setSyncStatus('syncing');
     try {
       const batch = writeBatch(db);
       
-      // Используем текущие модули и айтемы из стейта (загруженные из localstorage)
+      // Берем всё, что сейчас в стейте (локальное + облачное)
       modules.forEach((m) => {
         const ref = doc(db, "modules", m.id);
         batch.set(ref, m);
@@ -123,7 +155,7 @@ const App: React.FC = () => {
 
       await batch.commit();
       
-      // Только после успеха чистим всё
+      // Только после успеха чистим localstorage
       localStorage.removeItem('eduvault_modules');
       localStorage.removeItem('eduvault_items');
       setHasLocalData(false);
@@ -132,7 +164,7 @@ const App: React.FC = () => {
     } catch (e) {
       console.error(e);
       setSyncStatus('error');
-      alert("ОШИБКА МИГРАЦИИ: " + (e as Error).message);
+      alert("ОШИБКА ПРИ ПЕРЕНОСЕ: " + (e as Error).message);
     }
   };
 
@@ -169,18 +201,27 @@ const App: React.FC = () => {
     e.preventDefault(); e.stopPropagation();
     if (window.confirm('УДАЛИТЬ?')) {
       await deleteDoc(doc(db, "items", id));
+      // Если это был локальный айтем, он исчезнет из стейта при след. обновлении, 
+      // но лучше также удалить из локалстореджа если мы в локальном режиме
+      if (hasLocalData) {
+        setItems(prev => prev.filter(i => i.id !== id));
+      }
     }
   };
 
   const deleteModule = async (id: string, e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
-    if (window.confirm('УДАЛИТЬ МОДУЛЬ И ВСЁ ВНУТРИ?')) {
+    if (window.confirm('УДАЛИТЬ МОДУЛЬ?')) {
       await deleteDoc(doc(db, "modules", id));
       const q = query(collection(db, "items"), where("moduleId", "==", id));
       const snap = await getDocs(q);
       const batch = writeBatch(db);
       snap.forEach(d => batch.delete(d.ref));
       await batch.commit();
+      if (hasLocalData) {
+        setModules(prev => prev.filter(m => m.id !== id));
+        setItems(prev => prev.filter(i => i.moduleId !== id));
+      }
     }
   };
 
@@ -221,46 +262,45 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-white text-black font-bold">
-      {/* SIDEBAR */}
-      <aside className="w-80 border-r-4 border-black flex flex-col z-30 shrink-0 bg-white">
-        <div className="p-8 border-b-4 border-black bg-black text-white">
+      <aside className="w-80 border-r-4 border-black flex flex-col z-30 shrink-0 bg-white shadow-[10px_0px_30px_rgba(0,0,0,0.05)]">
+        <div className="p-8 border-b-4 border-black bg-black text-white relative">
           <div className="flex items-center gap-3">
             <ArchiveBoxIcon className="w-8 h-8 text-[#00FF00]" />
             <h1 className="text-2xl font-black italic tracking-tighter">VAULT_BASE</h1>
           </div>
           <div className="mt-4 flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${syncStatus === 'syncing' ? 'bg-yellow-400 animate-pulse' : (hasLocalData ? 'bg-orange-500' : 'bg-[#00FF00]')}`} />
-            <span className="text-[10px] uppercase opacity-50">
-              {hasLocalData ? 'LOCAL_DATA_DETECTED' : 'DATABASE_CLOUD'}
+            <div className={`w-2 h-2 rounded-full ${syncStatus === 'syncing' ? 'bg-yellow-400 animate-pulse' : (hasLocalData ? 'bg-orange-500 shadow-[0_0_8px_#f97316]' : 'bg-[#00FF00] shadow-[0_0_8px_#00FF00]')}`} />
+            <span className="text-[10px] uppercase opacity-70">
+              {hasLocalData ? 'UNSYNCED_LOCAL_DATA' : 'DATABASE_CLOUD_SYNC'}
             </span>
           </div>
         </div>
 
-        <nav className="flex-1 overflow-y-auto">
+        <nav className="flex-1 overflow-y-auto custom-scrollbar">
           {hasLocalData && (
-             <div className="p-6 bg-orange-50 border-b-4 border-black">
-                <p className="text-[10px] uppercase mb-4 text-black font-black leading-tight">
-                  Найдены локальные данные. Перенеси их в облако, чтобы они не пропали при очистке кэша браузера.
+             <div className="p-6 bg-orange-100 border-b-4 border-black animate-pulse-subtle">
+                <p className="text-[11px] uppercase mb-4 text-black font-black leading-tight">
+                  Внимание! Обнаружены локальные файлы. Они не синхронизированы с облаком.
                 </p>
                 <button 
                   onClick={migrateToCloud}
-                  className="w-full border-4 border-black bg-[#00FF00] text-black text-[10px] py-3 flex items-center justify-center gap-2 hover:bg-black hover:text-white transition-all font-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                  className="w-full border-4 border-black bg-[#00FF00] text-black text-[10px] py-3 flex items-center justify-center gap-2 hover:bg-black hover:text-white transition-all font-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1"
                 >
                   <ArrowUpCircleIcon className="w-5 h-5" />
-                  MIGRATE TO FIREBASE
+                  SYNC ALL TO CLOUD
                 </button>
              </div>
           )}
 
           <button
             onClick={() => setActiveModuleId(null)}
-            className={`w-full text-left px-8 py-5 text-xs border-b-2 border-black uppercase font-black ${!activeModuleId ? 'bg-[#00FF00]' : 'hover:bg-gray-100'}`}
+            className={`w-full text-left px-8 py-5 text-xs border-b-2 border-black uppercase font-black transition-colors ${!activeModuleId ? 'bg-[#00FF00]' : 'hover:bg-gray-100'}`}
           >
             [ Весь архив ]
           </button>
 
           <div className="px-8 py-4 bg-gray-50 border-b-2 border-black flex items-center justify-between">
-            <span className="text-[10px] uppercase opacity-40">Модули</span>
+            <span className="text-[10px] uppercase opacity-40">Категории</span>
             <button onClick={() => setIsAddingModule(true)} className="p-1 border-2 border-black bg-white hover:bg-black hover:text-white transition-colors">
               <PlusIcon className="w-4 h-4" />
             </button>
@@ -304,12 +344,14 @@ const App: React.FC = () => {
         </nav>
       </aside>
 
-      {/* MAIN CONTENT */}
-      <main className="flex-1 flex flex-col h-full bg-[#fafafa]">
+      <main className="flex-1 flex flex-col h-full bg-[#f4f4f4]">
         <header className="h-20 border-b-4 border-black flex items-center justify-between px-10 bg-white">
-          <h2 className="text-2xl font-black uppercase italic tracking-tighter">
-            {activeModule ? `/${activeModule.title}` : '/ALL_DATA'}
-          </h2>
+          <div className="flex items-center gap-4">
+            <h2 className="text-2xl font-black uppercase italic tracking-tighter">
+              {activeModule ? `/${activeModule.title}` : '/ARCHIVE_ALL'}
+            </h2>
+            {hasLocalData && <span className="bg-orange-500 text-white text-[8px] px-2 py-1 rounded">LOCAL_VIEW</span>}
+          </div>
           <div className="relative w-64">
             <input 
               placeholder="ПОИСК..."
@@ -335,9 +377,9 @@ const App: React.FC = () => {
                   <button 
                     onClick={handleQuickAdd}
                     disabled={!newContent.trim()}
-                    className="border-4 border-black bg-black text-white px-10 py-3 text-[10px] font-black hover:bg-[#00FF00] hover:text-black transition-colors disabled:opacity-30"
+                    className="border-4 border-black bg-black text-white px-10 py-3 text-[10px] font-black hover:bg-[#00FF00] hover:text-black transition-colors disabled:opacity-30 active:shadow-none active:translate-x-1 active:translate-y-1"
                   >
-                    SAVE_TO_DATABASE
+                    ADD_TO_DATABASE
                   </button>
                 </div>
               </div>
@@ -347,15 +389,15 @@ const App: React.FC = () => {
               {filteredItems.map(item => (
                 <article 
                   key={item.id} 
-                  className="border-4 border-black bg-white cursor-pointer hover:shadow-[12px_12px_0px_0px_#00FF00] transition-all"
+                  className="border-4 border-black bg-white cursor-pointer hover:shadow-[12px_12px_0px_0px_#00FF00] transition-all group"
                   onClick={() => setSelectedItem(item)}
                 >
-                  <div className="p-4 border-b-2 border-black flex justify-between items-center bg-gray-50">
-                     <h3 className="text-md font-black uppercase underline decoration-[#00FF00] decoration-4">
+                  <div className="p-4 border-b-2 border-black flex justify-between items-center bg-gray-50 group-hover:bg-[#00FF00]/5">
+                     <h3 className="text-md font-black uppercase underline decoration-[#00FF00] decoration-4 tracking-tight">
                        {item.title}
                      </h3>
                      <div className="flex items-center gap-4">
-                       <span className="text-[9px] opacity-30 font-black">{new Date(item.createdAt).toLocaleDateString()}</span>
+                       <span className="text-[9px] opacity-30 font-black tracking-widest">{new Date(item.createdAt).toLocaleDateString()}</span>
                        <button 
                           onClick={(e) => deleteItem(item.id, e)}
                           className="p-1 hover:text-red-600 transition-colors"
@@ -369,13 +411,18 @@ const App: React.FC = () => {
                   </div>
                 </article>
               ))}
+              
+              {filteredItems.length === 0 && (
+                <div className="text-center py-20 opacity-20 italic uppercase font-black text-4xl tracking-tighter">
+                  No_Data_Found
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* MODAL VIEW */}
         {selectedItem && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/90 animate-in fade-in duration-200">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/95 animate-in fade-in duration-300 backdrop-blur-sm">
             <div className="absolute inset-0" onClick={() => setSelectedItem(null)} />
             <div className="relative w-full max-w-5xl h-[85vh] bg-white border-4 border-black shadow-[20px_20px_0px_0px_#00FF00] flex flex-col">
               <header className="p-6 border-b-4 border-black flex justify-between items-center bg-white sticky top-0">
@@ -384,11 +431,15 @@ const App: React.FC = () => {
                   <XMarkIcon className="w-6 h-6" />
                 </button>
               </header>
-              <div className="flex-1 overflow-y-auto p-12 bg-white custom-scrollbar">
-                <div className="text-xl leading-relaxed whitespace-pre-wrap italic font-black">
+              <div className="flex-1 overflow-y-auto p-12 bg-white custom-scrollbar selection:bg-[#00FF00]">
+                <div className="text-xl leading-relaxed whitespace-pre-wrap italic font-black text-black/80">
                   {selectedItem.content}
                 </div>
               </div>
+              <footer className="p-4 border-t-2 border-black bg-gray-50 text-[10px] uppercase opacity-40 font-black flex justify-between italic">
+                <span>Created: {new Date(selectedItem.createdAt).toLocaleString()}</span>
+                <span>ID: {selectedItem.id}</span>
+              </footer>
             </div>
           </div>
         )}
